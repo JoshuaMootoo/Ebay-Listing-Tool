@@ -274,19 +274,17 @@ startImgBtn.addEventListener("click", async () => {
     setStatus(imgStatus, `Uploading ${i + 1}/${imageOrder.length}: ${escHtml(fileName)}…`);
 
     try {
-      // Check if this variation's input already exists in the picupload frame
-      // (e.g. it's the default-selected variation). Only click the <li> if the
-      // input isn't there yet — clicking an already-selected item deselects it.
-      let inputReady = false;
-      try {
-        inputReady = await execInFrame(tab.id, picuploadFrameId,
-          (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
-          [encoded]
-        );
-      } catch (_) {}
+      // Use the <li>'s "select" class (in parent frame) to decide whether to
+      // click — avoids accidentally deselecting an already-active variation.
+      const isSelected = await execInFrame(tab.id, parentFrameId,
+        (enc) => {
+          const el = document.querySelector(`[class*="__${enc}"]`);
+          return el ? el.classList.contains("select") : false;
+        },
+        [encoded]
+      );
 
-      if (!inputReady) {
-        // Step 1: click the variation's <li> to load its input in the picupload frame.
+      if (!isSelected) {
         const clicked = await execInFrame(tab.id, parentFrameId,
           (enc) => {
             const el = document.querySelector(`[class*="__${enc}"]`);
@@ -302,16 +300,35 @@ startImgBtn.addEventListener("click", async () => {
           break;
         }
 
-        // Step 2: wait for the input to appear (up to 6 s).
-        for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
-          await sleep(600);
-          try {
-            inputReady = await execInFrame(tab.id, picuploadFrameId,
-              (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
-              [encoded]
-            );
-          } catch (_) {}
+        // Wait for the <li> to gain the "select" class confirming the switch.
+        let confirmed = false;
+        for (let attempt = 0; attempt < 10 && !confirmed; attempt++) {
+          await sleep(500);
+          confirmed = await execInFrame(tab.id, parentFrameId,
+            (enc) => {
+              const el = document.querySelector(`[class*="__${enc}"]`);
+              return el ? el.classList.contains("select") : false;
+            },
+            [encoded]
+          );
         }
+
+        if (!confirmed) {
+          setStatus(imgStatus, `Variation did not become active: "${escHtml(varName)}"`, "error");
+          break;
+        }
+      }
+
+      // Now wait for the matching file input to appear in the picupload frame.
+      let inputReady = false;
+      for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
+        if (attempt > 0) await sleep(500);
+        try {
+          inputReady = await execInFrame(tab.id, picuploadFrameId,
+            (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
+            [encoded]
+          );
+        } catch (_) {}
       }
 
       if (!inputReady) {
