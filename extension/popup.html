@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eBay Bulk Variation Adder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      width: 320px;
+      background: #f5f5f5;
+      color: #222;
+    }
+
+    header {
+      background: #e53238;
+      color: #fff;
+      padding: 14px 16px;
+    }
+    header h1 { font-size: 15px; font-weight: 600; }
+    header p  { font-size: 11px; opacity: .85; margin-top: 2px; }
+
+    main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+    label.file-label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+    }
+
+    input[type="file"] {
+      border: 1px dashed #ccc;
+      border-radius: 6px;
+      padding: 8px;
+      background: #fff;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    input[type="file"]:hover { border-color: #e53238; }
+
+    .delay-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #555;
+      font-weight: 600;
+    }
+    .delay-row input[type="number"] {
+      width: 70px;
+      padding: 5px 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    #preview {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #444;
+      max-height: 100px;
+      overflow-y: auto;
+      display: none;
+    }
+    #preview .line { padding: 1px 0; }
+    #preview .meta { color: #888; margin-bottom: 4px; font-style: italic; }
+
+    button#startBtn {
+      background: #e53238;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    button#startBtn:hover:not(:disabled) { background: #c0272c; }
+    button#startBtn:disabled { background: #ccc; cursor: not-allowed; }
+
+    #status {
+      font-size: 12px;
+      min-height: 18px;
+      text-align: center;
+      color: #555;
+    }
+    #status.error { color: #c0272c; }
+    #status.success { color: #2e7d32; }
+
+    #progressWrap {
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+    }
+    progress {
+      width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      accent-color: #e53238;
+    }
+    #progressLabel { font-size: 11px; color: #666; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>eBay Bulk Variation Adder</h1>
+    <p>Add multiple variations from a text file</p>
+  </header>
+
+  <main>
+    <label class="file-label">
+      Select .txt file (one variation per line)
+      <input type="file" id="fileInput" accept=".txt" />
+    </label>
+
+    <div id="preview"></div>
+
+    <div class="delay-row">
+      Delay between variations:
+      <input type="number" id="delay" value="800" min="200" max="5000" step="100" />
+      ms
+    </div>
+
+    <button id="startBtn" disabled>Start Adding Variations</button>
+
+    <div id="progressWrap">
+      <progress id="progressBar" value="0" max="100"></progress>
+      <div id="progressLabel"></div>
+    </div>
+
+    <div id="status"></div>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

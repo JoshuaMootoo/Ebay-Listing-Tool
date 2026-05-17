@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "eBay Bulk Variation Adder",
+  "version": "1.0.0",
+  "description": "Reads a text file and adds each line as a separate variation on an eBay listing.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://*.ebay.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "eBay Bulk Variation Adder"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.ebay.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
