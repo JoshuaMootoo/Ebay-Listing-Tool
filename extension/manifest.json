@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "eBay Bulk Variation Adder",
-  "version": "1.0.0",
-  "description": "Reads a text file and adds each line as a separate variation on an eBay listing.",
+  "name": "eBay Bulk Listing Tool",
+  "version": "1.1.0",
+  "description": "Bulk-add variations and auto-upload images to eBay listings.",
   "permissions": ["activeTab", "scripting", "webNavigation"],
   "host_permissions": ["https://*.ebay.com/*", "https://*.ebay.co.uk/*", "https://*.ebay.com.au/*", "https://*.ebay.de/*", "https://*.ebay.fr/*", "https://*.ebay.it/*", "https://*.ebay.es/*", "https://*.ebay.ca/*"],
   "action": {
