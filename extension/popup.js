@@ -305,40 +305,62 @@ startImgBtn.addEventListener("click", async () => {
         }
       }
 
-      // Re-find the picupload frame every iteration — eBay may replace the
-      // iframe when switching variations, so a cached frameId goes stale.
-      let picuploadFrameId = null;
-      let inputReady = false;
-      for (let attempt = 0; attempt < 12 && !inputReady; attempt++) {
-        if (attempt > 0) await sleep(500);
-        try {
-          const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-          for (const frame of frames) {
-            if (!frame.url || !frame.url.includes("/lstng/picupload")) continue;
-            try {
-              const found = await execInFrame(tab.id, frame.frameId,
-                (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
-                [encoded]
-              );
-              if (found) { picuploadFrameId = frame.frameId; inputReady = true; break; }
-            } catch (_) {}
-          }
-        } catch (_) {}
-      }
+      // Check if input is reachable via iframe.contentDocument from the parent frame.
+      // eBay sets document.domain so the parent can access the picupload iframe directly.
+      const inputCheck = await execInFrame(tab.id, parentFrameId,
+        (enc) => {
+          const iframe = document.querySelector('#picupload-variations iframe');
+          if (!iframe) return { ok: false, error: 'iframe element not found' };
+          let doc;
+          try { doc = iframe.contentDocument || iframe.contentWindow?.document; }
+          catch (e) { return { ok: false, error: 'cross-origin: ' + e.message }; }
+          if (!doc) return { ok: false, error: 'contentDocument is null' };
+          return { ok: true, hasInput: !!doc.querySelector(`input[type="file"][id="${enc}"]`) };
+        },
+        [encoded]
+      );
 
-      if (!inputReady) {
-        setStatus(imgStatus, `Upload input did not appear for: "${escHtml(varName)}"`, "error");
+      if (!inputCheck?.ok) {
+        setStatus(imgStatus, `Cannot access upload iframe: ${inputCheck?.error || 'unknown'}`, "error");
         break;
       }
 
-      // Inject the file into the input.
+      // If the input isn't ready yet, poll briefly.
+      if (!inputCheck.hasInput) {
+        let inputReady = false;
+        for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
+          await sleep(500);
+          const check = await execInFrame(tab.id, parentFrameId,
+            (enc) => {
+              const iframe = document.querySelector('#picupload-variations iframe');
+              try {
+                const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
+                return !!doc?.querySelector(`input[type="file"][id="${enc}"]`);
+              } catch { return false; }
+            },
+            [encoded]
+          );
+          if (check) inputReady = true;
+        }
+        if (!inputReady) {
+          setStatus(imgStatus, `Upload input did not appear for: "${escHtml(varName)}"`, "error");
+          break;
+        }
+      }
+
+      // Inject the file directly via iframe.contentDocument in the parent frame.
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
-      const result = await execInFrame(tab.id, picuploadFrameId,
+      const result = await execInFrame(tab.id, parentFrameId,
         (enc, base64Data, name, type) => {
-          const input = document.querySelector(`input[type="file"][id="${enc}"]`);
-          if (!input) return { success: false, error: "File input disappeared before upload." };
+          const iframe = document.querySelector('#picupload-variations iframe');
+          let doc;
+          try { doc = iframe?.contentDocument || iframe?.contentWindow?.document; }
+          catch (e) { return { success: false, error: 'cross-origin: ' + e.message }; }
+
+          const input = doc?.querySelector(`input[type="file"][id="${enc}"]`);
+          if (!input) return { success: false, error: 'input not found in iframe' };
 
           const binary = atob(base64Data);
           const bytes  = new Uint8Array(binary.length);
@@ -348,12 +370,11 @@ startImgBtn.addEventListener("click", async () => {
           const dt = new DataTransfer();
           dt.items.add(f);
           input.files = dt.files;
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-          input.dispatchEvent(new Event("input",  { bubbles: true }));
-
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('input',  { bubbles: true }));
           return { success: true };
         },
-        [encoded, base64, file.name, file.type || "image/jpeg"]
+        [encoded, base64, file.name, file.type || 'image/jpeg']
       );
 
       if (!result?.success) {
