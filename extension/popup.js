@@ -274,35 +274,44 @@ startImgBtn.addEventListener("click", async () => {
     setStatus(imgStatus, `Uploading ${i + 1}/${imageOrder.length}: ${escHtml(fileName)}…`);
 
     try {
-      // Step 1: click the variation's <li> in the parent frame — this tells the
-      // shared picupload iframe to load this variation's upload UI and create
-      // the matching input[type="file"][id=encoded].
-      const clicked = await execInFrame(tab.id, parentFrameId,
-        (enc) => {
-          const el = document.querySelector(`[class*="__${enc}"]`);
-          if (!el) return false;
-          el.click();
-          return true;
-        },
-        [encoded]
-      );
-
-      if (!clicked) {
-        setStatus(imgStatus, `Variation button not found for: "${escHtml(varName)}"`, "error");
-        break;
-      }
-
-      // Step 2: wait for the file input with the matching id to appear in the
-      // shared picupload frame (up to 6 s).
+      // Check if this variation's input already exists in the picupload frame
+      // (e.g. it's the default-selected variation). Only click the <li> if the
+      // input isn't there yet — clicking an already-selected item deselects it.
       let inputReady = false;
-      for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
-        await sleep(600);
-        try {
-          inputReady = await execInFrame(tab.id, picuploadFrameId,
-            (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
-            [encoded]
-          );
-        } catch (_) {}
+      try {
+        inputReady = await execInFrame(tab.id, picuploadFrameId,
+          (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
+          [encoded]
+        );
+      } catch (_) {}
+
+      if (!inputReady) {
+        // Step 1: click the variation's <li> to load its input in the picupload frame.
+        const clicked = await execInFrame(tab.id, parentFrameId,
+          (enc) => {
+            const el = document.querySelector(`[class*="__${enc}"]`);
+            if (!el) return false;
+            el.click();
+            return true;
+          },
+          [encoded]
+        );
+
+        if (!clicked) {
+          setStatus(imgStatus, `Variation button not found for: "${escHtml(varName)}"`, "error");
+          break;
+        }
+
+        // Step 2: wait for the input to appear (up to 6 s).
+        for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
+          await sleep(600);
+          try {
+            inputReady = await execInFrame(tab.id, picuploadFrameId,
+              (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
+              [encoded]
+            );
+          } catch (_) {}
+        }
       }
 
       if (!inputReady) {
