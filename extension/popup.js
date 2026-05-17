@@ -343,14 +343,19 @@ startImgBtn.addEventListener("click", async () => {
       // Poll the picupload frame for the file input using the full encoded ID.
       // If the frameId went stale, re-find it.
       let inputReady = false;
+      let foundIds = [];
       for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
         if (attempt > 0) await sleep(500);
         try {
-          const found = await execInFrame(tab.id, picuploadFrameId,
-            (fEnc) => !!document.querySelector(`input[type="file"][id="${fEnc}"]`),
+          const result = await execInFrame(tab.id, picuploadFrameId,
+            (fEnc) => {
+              const all = [...document.querySelectorAll('input[type="file"]')].map(el => el.id);
+              return { found: all.includes(fEnc), ids: all };
+            },
             [fullEnc]
           );
-          if (found) inputReady = true;
+          if (result?.found) { inputReady = true; }
+          else if (result?.ids?.length) { foundIds = result.ids; }
         } catch (_) {
           const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
           for (const frame of frames) {
@@ -363,7 +368,10 @@ startImgBtn.addEventListener("click", async () => {
       }
 
       if (!inputReady) {
-        setStatus(imgStatus, `Upload input did not appear for: "${escHtml(varName)}"`, "error");
+        const hint = foundIds.length
+          ? ` (found IDs: ${foundIds.slice(0, 3).map(id => `"${id}"`).join(", ")}${foundIds.length > 3 ? "…" : ""})`
+          : " (no file inputs found)";
+        setStatus(imgStatus, `Upload input not found for: "${escHtml(varName)}"${hint}`, "error");
         break;
       }
 
