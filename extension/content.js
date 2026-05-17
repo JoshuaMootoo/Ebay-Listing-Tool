@@ -1,4 +1,3 @@
-// Waits for an element matching `selector` to appear in the DOM, up to `timeout` ms.
 function waitForElement(selector, timeout = 5000) {
   return new Promise((resolve, reject) => {
     const el = document.querySelector(selector);
@@ -36,13 +35,16 @@ function base64ToFile(base64, fileName, fileType) {
   return new File([bytes], fileName, { type: fileType });
 }
 
-function waitForUploadComplete(root, timeout) {
+// Waits for a thumbnail to appear in the uploader after a file is set.
+function waitForUploadComplete(timeout) {
   return new Promise(resolve => {
+    const root = document.body;
+
     const check = () =>
-      root.querySelector('img[src]:not([src=""])') ||
       root.querySelector('.photo-tile__img') ||
       root.querySelector('[class*="thumb"]') ||
-      root.querySelector('[class*="preview"]');
+      root.querySelector('[class*="preview"]') ||
+      root.querySelector('img[src]:not([src=""])');
 
     if (check()) { resolve(); return; }
 
@@ -54,109 +56,53 @@ function waitForUploadComplete(root, timeout) {
   });
 }
 
-// ── Role: picupload iframe ────────────────────────────────────────────────────
-// When running inside a picupload iframe, listen for file data sent via
-// postMessage from the parent frame content script.
-window.addEventListener("message", async (event) => {
-  if (!event.data || event.data.action !== "ebayBulkUpload") return;
-
-  const { messageId, fileName, fileData, fileType, uploadDelay } = event.data;
-
-  try {
-    const file = base64ToFile(fileData, fileName, fileType);
-    const dt = new DataTransfer();
-    dt.items.add(file);
-
-    // Strategy 1: find a hidden <input type="file">
-    const fileInput = document.querySelector('input[type="file"]');
-    if (fileInput) {
-      fileInput.files = dt.files;
-      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-      fileInput.dispatchEvent(new Event("input",  { bubbles: true }));
-    } else {
-      // Strategy 2: simulate drag-and-drop on the drop zone
-      const dropZone =
-        document.querySelector('[aria-description*="Drag and drop"]') ||
-        document.querySelector('.uploader-ui-ux__options--no-stencils') ||
-        document.body;
-
-      for (const evtName of ["dragenter", "dragover", "drop"]) {
-        dropZone.dispatchEvent(new DragEvent(evtName, {
-          dataTransfer: dt, bubbles: true, cancelable: true,
-        }));
-      }
-    }
-
-    await waitForUploadComplete(document.body, uploadDelay);
-    event.source.postMessage({ action: "ebayBulkUploadResult", messageId, success: true }, "*");
-  } catch (err) {
-    event.source.postMessage({ action: "ebayBulkUploadResult", messageId, success: false, error: err.message }, "*");
-  }
-});
-
-// ── Role: parent / listing frame ─────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
-  // Probe: how many variation upload iframes are in this frame?
+  // ── Image zone probe ────────────────────────────────────────────────────────
+  // Only the picupload iframe has this pathname; all other frames return 0.
   if (msg.action === "probeImageZones") {
-    const count = document.querySelectorAll('iframe[class*="picupload-variations__"]').length;
+    if (!location.pathname.includes("/lstng/picupload")) {
+      sendResponse({ count: 0 });
+      return;
+    }
+    const count = document.querySelectorAll('input[type="file"]').length;
     sendResponse({ count });
     return;
   }
 
-  // Upload: send one image to the Nth variation iframe via postMessage.
+  // ── Image upload ────────────────────────────────────────────────────────────
+  // Runs inside the picupload iframe. Finds the Nth hidden file input
+  // (one per variation, in DOM order) and sets its files.
   if (msg.action === "uploadImage") {
+    if (!location.pathname.includes("/lstng/picupload")) return;
+
     const { index, fileName, fileData, fileType, uploadDelay } = msg;
+    const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
 
-    const iframes = Array.from(document.querySelectorAll('iframe[class*="picupload-variations__"]'));
-
-    if (iframes.length === 0) {
-      sendResponse({ success: false, error: "No variation upload iframes found on this page. Make sure the Variations section is expanded." });
-      return;
-    }
-    if (index >= iframes.length) {
-      sendResponse({ success: false, error: `Index ${index} out of range (found ${iframes.length} iframes).` });
-      return;
-    }
-
-    const iframe = iframes[index];
-    const messageId = `ebay-upload-${Date.now()}-${index}`;
-
-    // Listen for the result that the iframe's content script sends back.
-    const resultHandler = (event) => {
-      if (event.data?.action === "ebayBulkUploadResult" && event.data.messageId === messageId) {
-        window.removeEventListener("message", resultHandler);
-        clearTimeout(safetyTimer);
-        sendResponse({ success: event.data.success, error: event.data.error });
+    (async () => {
+      if (inputs.length === 0) {
+        sendResponse({ success: false, error: "No file inputs found inside the picupload iframe." });
+        return;
       }
-    };
-    window.addEventListener("message", resultHandler);
+      if (index >= inputs.length) {
+        sendResponse({ success: false, error: `Index ${index} out of range (found ${inputs.length} inputs).` });
+        return;
+      }
 
-    // Safety timeout in case the iframe never replies.
-    const safetyTimer = setTimeout(() => {
-      window.removeEventListener("message", resultHandler);
-      sendResponse({ success: false, error: `Timed out waiting for iframe response on image ${index + 1}.` });
-    }, uploadDelay + 15000);
+      const input = inputs[index];
+      const file  = base64ToFile(fileData, fileName, fileType);
+      const dt    = new DataTransfer();
+      dt.items.add(file);
 
-    // Wait for the iframe to be ready, then send the file data.
-    const send = () => {
-      iframe.contentWindow.postMessage({
-        action: "ebayBulkUpload",
-        messageId,
-        fileName,
-        fileData,
-        fileType,
-        uploadDelay,
-      }, "*");
-    };
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("input",  { bubbles: true }));
 
-    if (iframe.contentDocument?.readyState === "complete" || iframe.src === "") {
-      send();
-    } else {
-      iframe.addEventListener("load", send, { once: true });
-    }
+      await waitForUploadComplete(uploadDelay);
+      sendResponse({ success: true });
+    })();
 
-    return true; // keep channel open for async response
+    return true;
   }
 
   // ── Variations ──────────────────────────────────────────────────────────────
