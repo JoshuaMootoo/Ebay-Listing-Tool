@@ -46,7 +46,7 @@ startBtn.addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) { setStatus("No active tab found.", "error"); return; }
 
-  if (!tab.url || !tab.url.includes("ebay.com")) {
+  if (!tab.url || !tab.url.includes("ebay.")) {
     setStatus("Please navigate to an eBay listing page first.", "error");
     return;
   }
