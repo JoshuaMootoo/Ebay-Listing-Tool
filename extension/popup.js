@@ -14,13 +14,23 @@ function setProgress(bar, label, current, total) {
   label.textContent = `${current} / ${total}`;
 }
 
-async function getEbayFrame(tabId) {
-  const frames = await chrome.webNavigation.getAllFrames({ tabId });
-  return frames; // caller iterates to find the right frame
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function sendToFrame(tabId, frameId, message) {
   return chrome.tabs.sendMessage(tabId, message, { frameId });
+}
+
+// Runs a function directly in a specific frame using scripting.executeScript.
+// This works even if the content script was never injected into that frame.
+async function execInFrame(tabId, frameId, func, args = []) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [frameId] },
+    func,
+    args,
+  });
+  return results?.[0]?.result;
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -91,14 +101,14 @@ startVarBtn.addEventListener("click", async () => {
   setStatus(varStatus, "Running…");
 
   try {
-    const frames = await getEbayFrame(tab.id);
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
     let result = null;
 
     for (const frame of frames) {
       try {
         result = await sendToFrame(tab.id, frame.frameId, { action: "addVariations", lines: varLines, delay });
         if (result != null) break;
-      } catch (_) { /* frame has no content script */ }
+      } catch (_) {}
     }
 
     if (result?.success) {
@@ -126,8 +136,8 @@ const imgProgressBar  = document.getElementById("imgProgressBar");
 const imgProgressLabel= document.getElementById("imgProgressLabel");
 const imgStatus       = document.getElementById("imgStatus");
 
-let imageMap   = {};  // filename (lowercase) → File
-let imageOrder = [];  // ordered list of filenames from order.txt
+let imageMap   = {};
+let imageOrder = [];
 
 function tryEnableImgStart() {
   const ready = imageOrder.length > 0 && Object.keys(imageMap).length > 0;
@@ -150,9 +160,7 @@ function renderImgPreview() {
 
 folderInput.addEventListener("change", () => {
   imageMap = {};
-  for (const file of folderInput.files) {
-    imageMap[file.name.toLowerCase()] = file;
-  }
+  for (const file of folderInput.files) imageMap[file.name.toLowerCase()] = file;
   tryEnableImgStart();
 });
 
@@ -179,23 +187,29 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Find the frame that has the variation upload zones
+  // Find the picupload iframe frame using executeScript (works for dynamic iframes
+  // that the content script was never injected into).
+  setStatus(imgStatus, "Locating upload zones…");
   let targetFrameId = null;
-  try {
-    const frames = await getEbayFrame(tab.id);
+
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS && targetFrameId === null; attempt++) {
+    if (attempt > 0) await sleep(1500);
+
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+
     for (const frame of frames) {
       try {
-        const probe = await sendToFrame(tab.id, frame.frameId, { action: "probeImageZones" });
-        if (probe && probe.count > 0) { targetFrameId = frame.frameId; break; }
-      } catch (_) { /* frame has no content script */ }
+        const count = await execInFrame(tab.id, frame.frameId,
+          () => document.querySelectorAll('input[type="file"][id*="FSLASH"]').length
+        );
+        if (count > 0) { targetFrameId = frame.frameId; break; }
+      } catch (_) {}
     }
-  } catch (err) {
-    setStatus(imgStatus, "Could not reach the page. Reload the tab and try again.", "error");
-    return;
   }
 
   if (targetFrameId === null) {
-    setStatus(imgStatus, "No variation upload zones found. Make sure the Variations section is expanded.", "error");
+    setStatus(imgStatus, "Could not find variation upload inputs. Make sure the page is fully loaded and the Variations section is expanded.", "error");
     return;
   }
 
@@ -211,7 +225,7 @@ startImgBtn.addEventListener("click", async () => {
     const file = imageMap[fileName.toLowerCase()];
 
     if (!file) {
-      setStatus(imgStatus, `File not found in folder: "${fileName}"`, "error");
+      setStatus(imgStatus, `File not found in folder: "${escHtml(fileName)}"`, "error");
       break;
     }
 
@@ -221,14 +235,28 @@ startImgBtn.addEventListener("click", async () => {
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
-      const result = await sendToFrame(tab.id, targetFrameId, {
-        action: "uploadImage",
-        index: i,
-        fileName: file.name,
-        fileData: base64,
-        fileType: file.type || "image/jpeg",
-        uploadDelay,
-      });
+      // Run the upload directly inside the picupload iframe — no content script needed.
+      const result = await execInFrame(tab.id, targetFrameId,
+        (index, base64Data, name, type) => {
+          const inputs = document.querySelectorAll('input[type="file"][id*="FSLASH"]');
+          if (index >= inputs.length)
+            return { success: false, error: `Index ${index} out of range (${inputs.length} inputs found)` };
+
+          const binary = atob(base64Data);
+          const bytes  = new Uint8Array(binary.length);
+          for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+          const f = new File([bytes], name, { type });
+
+          const dt = new DataTransfer();
+          dt.items.add(f);
+          inputs[index].files = dt.files;
+          inputs[index].dispatchEvent(new Event("change", { bubbles: true }));
+          inputs[index].dispatchEvent(new Event("input",  { bubbles: true }));
+
+          return { success: true };
+        },
+        [i, base64, file.name, file.type || "image/jpeg"]
+      );
 
       if (!result?.success) {
         setStatus(imgStatus, result?.error || `Failed on image ${i + 1}.`, "error");
@@ -237,6 +265,9 @@ startImgBtn.addEventListener("click", async () => {
 
       uploaded++;
       setProgress(imgProgressBar, imgProgressLabel, uploaded, imageOrder.length);
+
+      // Wait for eBay's uploader to process the file before moving to the next one.
+      await sleep(uploadDelay);
     } catch (err) {
       setStatus(imgStatus, `Error on image ${i + 1}: ${err.message}`, "error");
       break;
@@ -277,10 +308,8 @@ function lockUI(locked, section) {
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
-  // Process in chunks to avoid call-stack limits on large files
   const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
+  for (let i = 0; i < bytes.length; i += chunkSize)
     binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
   return btoa(binary);
 }
