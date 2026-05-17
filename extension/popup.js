@@ -224,7 +224,7 @@ startImgBtn.addEventListener("click", async () => {
     for (const frame of frames) {
       try {
         const found = await execInFrame(tab.id, frame.frameId,
-          () => document.querySelector('[id*="picupload-variations__"]') !== null
+          () => document.querySelector('[class*="picupload-variations__"]') !== null
         );
         if (found) { parentFrameId = frame.frameId; break; }
       } catch (_) {}
@@ -265,7 +265,7 @@ startImgBtn.addEventListener("click", async () => {
       // its picupload iframe to load (they are lazy-loaded).
       const clicked = await execInFrame(tab.id, parentFrameId,
         (enc) => {
-          const el = document.querySelector(`[id*="__${enc}"]`);
+          const el = document.querySelector(`[class*="__${enc}"]`);
           if (!el) return false;
           el.click();
           return true;
