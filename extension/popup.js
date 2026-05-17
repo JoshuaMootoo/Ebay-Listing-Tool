@@ -212,30 +212,27 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Build a map of encoded variation name → frameId by reading each picupload
-  // frame's file input id (e.g. "001_FSLASH_185_-_Weedle" → frameId).
-  // This is more reliable than positional ordering.
-  setStatus(imgStatus, "Mapping upload zones to variations…");
-  let variationFrameMap = {};
+  // Find the parent frame — the one that contains the picupload-variations
+  // container elements (id contains "picupload-variations__").
+  setStatus(imgStatus, "Finding listing frame…");
+  let parentFrameId = null;
 
   const MAX_ATTEMPTS = 5;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS && Object.keys(variationFrameMap).length === 0; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS && parentFrameId === null; attempt++) {
     if (attempt > 0) await sleep(1500);
-    variationFrameMap = {};
-
     const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
     for (const frame of frames) {
       try {
-        const inputId = await execInFrame(tab.id, frame.frameId,
-          () => document.querySelector('input[type="file"][id*="FSLASH"]')?.id ?? null
+        const found = await execInFrame(tab.id, frame.frameId,
+          () => document.querySelector('[id*="picupload-variations__"]') !== null
         );
-        if (inputId) variationFrameMap[inputId] = frame.frameId;
+        if (found) { parentFrameId = frame.frameId; break; }
       } catch (_) {}
     }
   }
 
-  if (Object.keys(variationFrameMap).length === 0) {
-    setStatus(imgStatus, "Could not find variation upload inputs. Make sure the page is fully loaded and the Variations section is expanded.", "error");
+  if (parentFrameId === null) {
+    setStatus(imgStatus, "Could not find the listing frame. Make sure the Variations section is visible on the page.", "error");
     return;
   }
 
@@ -247,9 +244,9 @@ startImgBtn.addEventListener("click", async () => {
   let uploaded = 0;
 
   for (let i = 0; i < imageOrder.length; i++) {
-    const fileName  = imageOrder[i];
-    const varName   = imgVarLines[i];
-    const file      = imageMap[fileName.toLowerCase()];
+    const fileName = imageOrder[i];
+    const varName  = imgVarLines[i];
+    const file     = imageMap[fileName.toLowerCase()];
 
     if (!varName) {
       setStatus(imgStatus, `No variation name for line ${i + 1} — variations file is shorter than image list.`, "error");
@@ -261,16 +258,48 @@ startImgBtn.addEventListener("click", async () => {
     }
 
     const encoded = encodeVariation(varName);
-    const frameId = variationFrameMap[encoded];
-
-    if (!frameId) {
-      setStatus(imgStatus, `No upload zone found for: "${escHtml(varName)}" (encoded: ${escHtml(encoded)})`, "error");
-      break;
-    }
-
     setStatus(imgStatus, `Uploading ${i + 1}/${imageOrder.length}: ${escHtml(fileName)}…`);
 
     try {
+      // Step 1: click the variation's container in the parent frame to trigger
+      // its picupload iframe to load (they are lazy-loaded).
+      const clicked = await execInFrame(tab.id, parentFrameId,
+        (enc) => {
+          const el = document.querySelector(`[id*="__${enc}"]`);
+          if (!el) return false;
+          el.click();
+          return true;
+        },
+        [encoded]
+      );
+
+      if (!clicked) {
+        setStatus(imgStatus, `Container not found for: "${escHtml(varName)}"`, "error");
+        break;
+      }
+
+      // Step 2: wait for the picupload iframe for this variation to appear and
+      // expose its file input (id === encoded variation name).
+      let frameId = null;
+      for (let attempt = 0; attempt < 10 && !frameId; attempt++) {
+        await sleep(600);
+        const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+        for (const frame of frames) {
+          try {
+            const inputId = await execInFrame(tab.id, frame.frameId,
+              () => document.querySelector('input[type="file"][id*="FSLASH"]')?.id ?? null
+            );
+            if (inputId === encoded) { frameId = frame.frameId; break; }
+          } catch (_) {}
+        }
+      }
+
+      if (!frameId) {
+        setStatus(imgStatus, `Upload iframe did not load for: "${escHtml(varName)}"`, "error");
+        break;
+      }
+
+      // Step 3: inject the file directly into the frame's hidden file input.
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
