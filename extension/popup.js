@@ -126,6 +126,7 @@ startVarBtn.addEventListener("click", async () => {
 
 // ── Images tab ────────────────────────────────────────────────────────────────
 
+const imgVarFileInput = document.getElementById("imgVarFileInput");
 const folderInput     = document.getElementById("folderInput");
 const orderFileInput  = document.getElementById("orderFileInput");
 const startImgBtn     = document.getElementById("startImgBtn");
@@ -136,27 +137,46 @@ const imgProgressBar  = document.getElementById("imgProgressBar");
 const imgProgressLabel= document.getElementById("imgProgressLabel");
 const imgStatus       = document.getElementById("imgStatus");
 
-let imageMap   = {};
-let imageOrder = [];
+let imageMap      = {};  // filename (lowercase) → File
+let imageOrder    = [];  // ordered image filenames from file-list txt
+let imgVarLines   = [];  // ordered variation names (same file as Variations tab)
+
+// Encodes a variation name to match eBay's file input id format.
+// "001 / 185 - Weedle" → "001_FSLASH_185_-_Weedle"
+function encodeVariation(name) {
+  return name.replace(/\//g, "FSLASH").replace(/ /g, "_");
+}
 
 function tryEnableImgStart() {
-  const ready = imageOrder.length > 0 && Object.keys(imageMap).length > 0;
+  const ready = imgVarLines.length > 0 && imageOrder.length > 0 && Object.keys(imageMap).length > 0;
   startImgBtn.disabled = !ready;
   if (ready) renderImgPreview();
 }
 
 function renderImgPreview() {
-  const missing = imageOrder.filter(name => !imageMap[name.toLowerCase()]);
-  let html = `<div class="meta">${imageOrder.length} image${imageOrder.length === 1 ? "" : "s"} in order`;
-  if (missing.length) html += ` · <span style="color:#c0272c">${missing.length} not found in folder</span>`;
+  const count = Math.max(imgVarLines.length, imageOrder.length);
+  const mismatched = imgVarLines.length !== imageOrder.length;
+  let html = `<div class="meta">${count} entr${count === 1 ? "y" : "ies"}`;
+  if (mismatched) html += ` · <span style="color:#c0272c">line count mismatch!</span>`;
   html += "</div>";
-  html += imageOrder.map((name, i) => {
-    const found = !!imageMap[name.toLowerCase()];
-    return `<div class="row">${found ? "✓" : "✗"} ${i + 1}. ${escHtml(name)}</div>`;
-  }).join("");
+  for (let i = 0; i < Math.min(imgVarLines.length, imageOrder.length); i++) {
+    const found = !!imageMap[imageOrder[i].toLowerCase()];
+    html += `<div class="row">${found ? "✓" : "✗"} ${i + 1}. ${escHtml(imageOrder[i])}</div>`;
+  }
   imgPreview.innerHTML = html;
   imgPreview.style.display = "block";
 }
+
+imgVarFileInput.addEventListener("change", () => {
+  const file = imgVarFileInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    imgVarLines = e.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    tryEnableImgStart();
+  };
+  reader.readAsText(file);
+});
 
 folderInput.addEventListener("change", () => {
   imageMap = {};
@@ -187,28 +207,34 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Each variation has its own picupload iframe containing exactly one
-  // input[type="file"][id*="FSLASH"]. Collect all such frame IDs in order.
-  setStatus(imgStatus, "Locating upload zones…");
-  let picuploadFrames = [];
+  if (imgVarLines.length === 0) {
+    setStatus(imgStatus, "Please select a variations .txt file.", "error");
+    return;
+  }
+
+  // Build a map of encoded variation name → frameId by reading each picupload
+  // frame's file input id (e.g. "001_FSLASH_185_-_Weedle" → frameId).
+  // This is more reliable than positional ordering.
+  setStatus(imgStatus, "Mapping upload zones to variations…");
+  let variationFrameMap = {};
 
   const MAX_ATTEMPTS = 5;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS && picuploadFrames.length === 0; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS && Object.keys(variationFrameMap).length === 0; attempt++) {
     if (attempt > 0) await sleep(1500);
+    variationFrameMap = {};
 
     const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-
     for (const frame of frames) {
       try {
-        const count = await execInFrame(tab.id, frame.frameId,
-          () => document.querySelectorAll('input[type="file"][id*="FSLASH"]').length
+        const inputId = await execInFrame(tab.id, frame.frameId,
+          () => document.querySelector('input[type="file"][id*="FSLASH"]')?.id ?? null
         );
-        if (count > 0) picuploadFrames.push(frame.frameId);
+        if (inputId) variationFrameMap[inputId] = frame.frameId;
       } catch (_) {}
     }
   }
 
-  if (picuploadFrames.length === 0) {
+  if (Object.keys(variationFrameMap).length === 0) {
     setStatus(imgStatus, "Could not find variation upload inputs. Make sure the page is fully loaded and the Variations section is expanded.", "error");
     return;
   }
@@ -221,16 +247,24 @@ startImgBtn.addEventListener("click", async () => {
   let uploaded = 0;
 
   for (let i = 0; i < imageOrder.length; i++) {
-    const fileName = imageOrder[i];
-    const file = imageMap[fileName.toLowerCase()];
+    const fileName  = imageOrder[i];
+    const varName   = imgVarLines[i];
+    const file      = imageMap[fileName.toLowerCase()];
 
+    if (!varName) {
+      setStatus(imgStatus, `No variation name for line ${i + 1} — variations file is shorter than image list.`, "error");
+      break;
+    }
     if (!file) {
       setStatus(imgStatus, `File not found in folder: "${escHtml(fileName)}"`, "error");
       break;
     }
 
-    if (i >= picuploadFrames.length) {
-      setStatus(imgStatus, `Only ${picuploadFrames.length} upload zone${picuploadFrames.length === 1 ? "" : "s"} found but order file has ${imageOrder.length} images.`, "error");
+    const encoded = encodeVariation(varName);
+    const frameId = variationFrameMap[encoded];
+
+    if (!frameId) {
+      setStatus(imgStatus, `No upload zone found for: "${escHtml(varName)}" (encoded: ${escHtml(encoded)})`, "error");
       break;
     }
 
@@ -240,8 +274,7 @@ startImgBtn.addEventListener("click", async () => {
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
-      // Each picupload frame has exactly one file input — always use index 0.
-      const result = await execInFrame(tab.id, picuploadFrames[i],
+      const result = await execInFrame(tab.id, frameId,
         (base64Data, name, type) => {
           const input = document.querySelector('input[type="file"][id*="FSLASH"]');
           if (!input) return { success: false, error: "File input not found in this frame." };
@@ -269,7 +302,6 @@ startImgBtn.addEventListener("click", async () => {
 
       uploaded++;
       setProgress(imgProgressBar, imgProgressLabel, uploaded, imageOrder.length);
-
       await sleep(uploadDelay);
     } catch (err) {
       setStatus(imgStatus, `Error on image ${i + 1}: ${err.message}`, "error");
@@ -302,6 +334,7 @@ function lockUI(locked, section) {
     varDelay.disabled = locked;
   } else {
     startImgBtn.disabled = locked;
+    imgVarFileInput.disabled = locked;
     folderInput.disabled = locked;
     orderFileInput.disabled = locked;
     imgDelay.disabled = locked;

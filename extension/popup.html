@@ -178,13 +178,18 @@
   <div id="panel-images" class="tab-panel">
     <main>
       <label class="file-label">
-        Select image folder
-        <input type="file" id="folderInput" webkitdirectory accept="image/*" />
+        Variations .txt file (same file used in Variations tab)
+        <input type="file" id="imgVarFileInput" accept=".txt" />
       </label>
 
       <label class="file-label">
-        Select order .txt file (image filenames in order)
+        Image filenames .txt file (one filename per line, same order)
         <input type="file" id="orderFileInput" accept=".txt" />
+      </label>
+
+      <label class="file-label">
+        Select image folder
+        <input type="file" id="folderInput" webkitdirectory accept="image/*" />
       </label>
 
       <div id="imgPreview" class="preview-box"></div>
