@@ -278,25 +278,7 @@ startImgBtn.addEventListener("click", async () => {
     setStatus(imgStatus, `Uploading ${i + 1}/${imageOrder.length}: ${escHtml(fileName)}…`);
 
     try {
-      // Extract the full encoded ID from the <li> class (includes listing-name prefix).
-      // e.g. "picupload-variations__Vivid_Voltage_-_Base_Set__001_FSLASH_185_-_Weedle"
-      // → "Vivid_Voltage_-_Base_Set__001_FSLASH_185_-_Weedle"
-      const fullEnc = await execInFrame(tab.id, parentFrameId,
-        (enc) => {
-          const el = document.querySelector(`[class*="__${enc}"]`);
-          if (!el) return null;
-          const cls = [...el.classList].find(c => c.startsWith("picupload-variations__"));
-          return cls ? cls.replace("picupload-variations__", "") : null;
-        },
-        [encoded]
-      );
-
-      if (!fullEnc) {
-        setStatus(imgStatus, `Variation button not found for: "${escHtml(varName)}"`, "error");
-        break;
-      }
-
-      // Click the <li> if not already selected.
+      // Click the <li> to select this variation if not already active.
       const isSelected = await execInFrame(tab.id, parentFrameId,
         (enc) => {
           const el = document.querySelector(`[class*="__${enc}"]`);
@@ -340,22 +322,17 @@ startImgBtn.addEventListener("click", async () => {
         }
       }
 
-      // Poll the picupload frame for the file input using the full encoded ID.
-      // If the frameId went stale, re-find it.
+      // The picupload iframe has a single shared input[id="DEFAULT"].
+      // eBay routes the upload to whichever variation is currently selected.
+      // Poll in case the frame is still loading; re-find frameId on error.
       let inputReady = false;
-      let foundIds = [];
       for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
         if (attempt > 0) await sleep(500);
         try {
-          const result = await execInFrame(tab.id, picuploadFrameId,
-            (fEnc) => {
-              const all = [...document.querySelectorAll('input[type="file"]')].map(el => el.id);
-              return { found: all.includes(fEnc), ids: all };
-            },
-            [fullEnc]
+          const found = await execInFrame(tab.id, picuploadFrameId,
+            () => !!document.getElementById("DEFAULT")
           );
-          if (result?.found) { inputReady = true; }
-          else if (result?.ids?.length) { foundIds = result.ids; }
+          if (found) inputReady = true;
         } catch (_) {
           const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
           for (const frame of frames) {
@@ -368,23 +345,18 @@ startImgBtn.addEventListener("click", async () => {
       }
 
       if (!inputReady) {
-        const hint = foundIds.length
-          ? ` (found IDs: ${foundIds.slice(0, 3).map(id => `"${id}"`).join(", ")}${foundIds.length > 3 ? "…" : ""})`
-          : " (no file inputs found)";
-        setStatus(imgStatus, `Upload input not found for: "${escHtml(varName)}"${hint}`, "error");
+        setStatus(imgStatus, `Upload input not ready for: "${escHtml(varName)}"`, "error");
         break;
       }
 
-      // Inject the file into the input directly in the picupload frame.
-      // chrome.scripting.executeScript bypasses same-origin for frames the
-      // extension has host_permissions for.
+      // Inject the file into the DEFAULT input in the picupload frame.
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
       const result = await execInFrame(tab.id, picuploadFrameId,
-        (fEnc, base64Data, name, type) => {
-          const input = document.querySelector(`input[type="file"][id="${fEnc}"]`);
-          if (!input) return { success: false, error: "input not found" };
+        (base64Data, name, type) => {
+          const input = document.getElementById("DEFAULT");
+          if (!input) return { success: false, error: "DEFAULT input not found" };
 
           const binary = atob(base64Data);
           const bytes  = new Uint8Array(binary.length);
@@ -398,7 +370,7 @@ startImgBtn.addEventListener("click", async () => {
           input.dispatchEvent(new Event("input",  { bubbles: true }));
           return { success: true };
         },
-        [fullEnc, base64, file.name, file.type || "image/jpeg"]
+        [base64, file.name, file.type || "image/jpeg"]
       );
 
       if (!result?.success) {
