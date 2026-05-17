@@ -60,11 +60,24 @@ startBtn.addEventListener("click", async () => {
   setStatus("Running…");
 
   try {
-    const result = await chrome.tabs.sendMessage(tab.id, {
-      action: "addVariations",
-      lines,
-      delay,
-    });
+    // Get all frames in the tab and find the one that has the variation UI.
+    // eBay renders the listing tool inside an iframe, so we broadcast to all frames
+    // and let the content script in the correct frame respond.
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+    let result = null;
+
+    for (const frame of frames) {
+      try {
+        result = await chrome.tabs.sendMessage(tab.id, {
+          action: "addVariations",
+          lines,
+          delay,
+        }, { frameId: frame.frameId });
+        if (result !== null && result !== undefined) break; // got a real response
+      } catch (_) {
+        // frame has no content script — skip
+      }
+    }
 
     if (result && result.success) {
       setStatus(`Done! Added ${result.added} of ${lines.length} variation${lines.length === 1 ? "" : "s"}.`, "success");

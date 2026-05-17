@@ -3,7 +3,7 @@
   "name": "eBay Bulk Variation Adder",
   "version": "1.0.0",
   "description": "Reads a text file and adds each line as a separate variation on an eBay listing.",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "webNavigation"],
   "host_permissions": ["https://*.ebay.com/*", "https://*.ebay.co.uk/*", "https://*.ebay.com.au/*", "https://*.ebay.de/*", "https://*.ebay.fr/*", "https://*.ebay.it/*", "https://*.ebay.es/*", "https://*.ebay.ca/*"],
   "action": {
     "default_popup": "popup.html",
@@ -13,7 +13,8 @@
     {
       "matches": ["https://*.ebay.com/*", "https://*.ebay.co.uk/*", "https://*.ebay.com.au/*", "https://*.ebay.de/*", "https://*.ebay.fr/*", "https://*.ebay.it/*", "https://*.ebay.es/*", "https://*.ebay.ca/*"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }

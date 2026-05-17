@@ -34,6 +34,10 @@ function fillInput(el, value) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action !== "addVariations") return;
 
+  // If this frame doesn't contain the variation UI, ignore the message so the
+  // popup keeps searching other frames.
+  if (!document.querySelector("#msku-custom-option-link")) return;
+
   const { lines, delay } = msg;
 
   (async () => {
