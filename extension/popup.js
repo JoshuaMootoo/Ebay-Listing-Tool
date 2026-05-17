@@ -187,13 +187,13 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Find the picupload iframe frame using executeScript (works for dynamic iframes
-  // that the content script was never injected into).
+  // Each variation has its own picupload iframe containing exactly one
+  // input[type="file"][id*="FSLASH"]. Collect all such frame IDs in order.
   setStatus(imgStatus, "Locating upload zones…");
-  let targetFrameId = null;
+  let picuploadFrames = [];
 
   const MAX_ATTEMPTS = 5;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS && targetFrameId === null; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS && picuploadFrames.length === 0; attempt++) {
     if (attempt > 0) await sleep(1500);
 
     const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
@@ -203,12 +203,12 @@ startImgBtn.addEventListener("click", async () => {
         const count = await execInFrame(tab.id, frame.frameId,
           () => document.querySelectorAll('input[type="file"][id*="FSLASH"]').length
         );
-        if (count > 0) { targetFrameId = frame.frameId; break; }
+        if (count > 0) picuploadFrames.push(frame.frameId);
       } catch (_) {}
     }
   }
 
-  if (targetFrameId === null) {
+  if (picuploadFrames.length === 0) {
     setStatus(imgStatus, "Could not find variation upload inputs. Make sure the page is fully loaded and the Variations section is expanded.", "error");
     return;
   }
@@ -229,18 +229,22 @@ startImgBtn.addEventListener("click", async () => {
       break;
     }
 
+    if (i >= picuploadFrames.length) {
+      setStatus(imgStatus, `Only ${picuploadFrames.length} upload zone${picuploadFrames.length === 1 ? "" : "s"} found but order file has ${imageOrder.length} images.`, "error");
+      break;
+    }
+
     setStatus(imgStatus, `Uploading ${i + 1}/${imageOrder.length}: ${escHtml(fileName)}…`);
 
     try {
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
-      // Run the upload directly inside the picupload iframe — no content script needed.
-      const result = await execInFrame(tab.id, targetFrameId,
-        (index, base64Data, name, type) => {
-          const inputs = document.querySelectorAll('input[type="file"][id*="FSLASH"]');
-          if (index >= inputs.length)
-            return { success: false, error: `Index ${index} out of range (${inputs.length} inputs found)` };
+      // Each picupload frame has exactly one file input — always use index 0.
+      const result = await execInFrame(tab.id, picuploadFrames[i],
+        (base64Data, name, type) => {
+          const input = document.querySelector('input[type="file"][id*="FSLASH"]');
+          if (!input) return { success: false, error: "File input not found in this frame." };
 
           const binary = atob(base64Data);
           const bytes  = new Uint8Array(binary.length);
@@ -249,13 +253,13 @@ startImgBtn.addEventListener("click", async () => {
 
           const dt = new DataTransfer();
           dt.items.add(f);
-          inputs[index].files = dt.files;
-          inputs[index].dispatchEvent(new Event("change", { bubbles: true }));
-          inputs[index].dispatchEvent(new Event("input",  { bubbles: true }));
+          input.files = dt.files;
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          input.dispatchEvent(new Event("input",  { bubbles: true }));
 
           return { success: true };
         },
-        [i, base64, file.name, file.type || "image/jpeg"]
+        [base64, file.name, file.type || "image/jpeg"]
       );
 
       if (!result?.success) {
@@ -266,7 +270,6 @@ startImgBtn.addEventListener("click", async () => {
       uploaded++;
       setProgress(imgProgressBar, imgProgressLabel, uploaded, imageOrder.length);
 
-      // Wait for eBay's uploader to process the file before moving to the next one.
       await sleep(uploadDelay);
     } catch (err) {
       setStatus(imgStatus, `Error on image ${i + 1}: ${err.message}`, "error");
