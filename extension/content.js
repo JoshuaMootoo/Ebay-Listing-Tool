@@ -24,60 +24,140 @@ function sleep(ms) {
 // Fills a text input, triggering React/Vue synthetic events so the framework sees the change.
 function fillInput(el, value) {
   el.focus();
-  // Native input value setter (bypasses framework state)
   const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
   nativeSetter.call(el, value);
   el.dispatchEvent(new Event("input",  { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+// Reconstructs a File object from base64-encoded data sent via message passing.
+function base64ToFile(base64, fileName, fileType) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], fileName, { type: fileType });
+}
+
+// Waits for the upload zone to show a thumbnail or success indicator,
+// falling back to a plain timeout so we never hang forever.
+function waitForUploadComplete(zone, timeout) {
+  return new Promise(resolve => {
+    const check = () =>
+      zone.querySelector('img[src]:not([src=""])') ||
+      zone.querySelector('.photo-tile__img') ||
+      zone.querySelector('[class*="thumb"]') ||
+      zone.querySelector('[class*="preview"]');
+
+    if (check()) { resolve(); return; }
+
+    const observer = new MutationObserver(() => {
+      if (check()) { observer.disconnect(); clearTimeout(timer); resolve(); }
+    });
+    observer.observe(zone, { childList: true, subtree: true, attributes: true });
+
+    const timer = setTimeout(() => { observer.disconnect(); resolve(); }, timeout);
+  });
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action !== "addVariations") return;
+  // ── Probe (frame discovery) ──────────────────────────────────────────────────
+  if (msg.action === "probeImageZones") {
+    const count = document.querySelectorAll('[id^="picupload-variations__"]').length;
+    sendResponse({ count });
+    return;
+  }
 
-  // If this frame doesn't contain the variation UI, ignore the message so the
-  // popup keeps searching other frames.
-  if (!document.querySelector("#msku-custom-option-link")) return;
+  // ── Variations ──────────────────────────────────────────────────────────────
+  if (msg.action === "addVariations") {
+    if (!document.querySelector("#msku-custom-option-link")) return;
 
-  const { lines, delay } = msg;
+    const { lines, delay } = msg;
 
-  (async () => {
-    let added = 0;
+    (async () => {
+      let added = 0;
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        chrome.runtime.sendMessage({ action: "progress", current: i, total: lines.length, line });
 
-      // Notify popup of progress
-      chrome.runtime.sendMessage({ action: "progress", current: i, total: lines.length, line });
+        try {
+          const createBtn = await waitForElement("#msku-custom-option-link");
+          createBtn.click();
 
-      try {
-        // Step 1: click "Create your own"
-        const createBtn = await waitForElement("#msku-custom-option-link");
-        createBtn.click();
+          const inputEl = await waitForElement("#msku-custom-option-input");
+          await sleep(150);
+          fillInput(inputEl, line);
 
-        // Step 2: wait for the input to appear and fill it
-        const inputEl = await waitForElement("#msku-custom-option-input");
-        await sleep(150); // brief settle time
-        fillInput(inputEl, line);
+          const addBtn = await waitForElement("#msku-custom-option-add");
+          addBtn.click();
 
-        // Step 3: click the Add button
-        const addBtn = await waitForElement("#msku-custom-option-add");
-        addBtn.click();
+          added++;
+        } catch (err) {
+          sendResponse({ success: false, added, error: `Line ${i + 1} ("${line}"): ${err.message}` });
+          return;
+        }
 
-        added++;
-      } catch (err) {
-        sendResponse({ success: false, added, error: `Line ${i + 1} ("${line}"): ${err.message}` });
-        return;
+        if (i < lines.length - 1) await sleep(delay);
       }
 
-      // Wait before processing the next line (except after the last one)
-      if (i < lines.length - 1) {
-        await sleep(delay);
-      }
+      sendResponse({ success: true, added });
+    })();
+
+    return true; // keep channel open
+  }
+
+  // ── Images ───────────────────────────────────────────────────────────────────
+  if (msg.action === "uploadImage") {
+    const { index, fileName, fileData, fileType, uploadDelay } = msg;
+
+    // Find all variation upload zones in DOM order.
+    // eBay gives each one an id starting with "picupload-variations__".
+    const zones = Array.from(document.querySelectorAll('[id^="picupload-variations__"]'));
+
+    if (zones.length === 0) {
+      sendResponse({ success: false, error: "No variation upload zones found on this page. Make sure the Variations section is expanded and visible." });
+      return true;
     }
 
-    sendResponse({ success: true, added });
-  })();
+    if (index >= zones.length) {
+      sendResponse({ success: false, error: `Upload zone index ${index} out of range (found ${zones.length} zones).` });
+      return true;
+    }
 
-  // Keep the message channel open for the async response
-  return true;
+    (async () => {
+      const zone = zones[index];
+      const file = base64ToFile(fileData, fileName, fileType);
+      const dt = new DataTransfer();
+      dt.items.add(file);
+
+      // Strategy 1: find a hidden <input type="file"> inside the zone.
+      const fileInput = zone.querySelector('input[type="file"]');
+      if (fileInput) {
+        fileInput.files = dt.files;
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+        fileInput.dispatchEvent(new Event("input",  { bubbles: true }));
+      } else {
+        // Strategy 2: simulate drag-and-drop on the drop zone div.
+        const dropTarget =
+          zone.querySelector('[aria-description*="Drag and drop"]') ||
+          zone.querySelector('.uploader-ui-ux__options--no-stencils') ||
+          zone;
+
+        for (const evtName of ["dragenter", "dragover", "drop"]) {
+          dropTarget.dispatchEvent(new DragEvent(evtName, {
+            dataTransfer: dt,
+            bubbles: true,
+            cancelable: true,
+          }));
+        }
+      }
+
+      // Wait until the upload UI reflects success (or the delay elapses).
+      await waitForUploadComplete(zone, uploadDelay);
+
+      sendResponse({ success: true });
+    })();
+
+    return true;
+  }
 });

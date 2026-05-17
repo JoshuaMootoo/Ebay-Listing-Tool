@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>eBay Bulk Variation Adder</title>
+  <title>eBay Bulk Listing Tool</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      width: 320px;
+      width: 340px;
       background: #f5f5f5;
       color: #222;
     }
@@ -17,12 +17,38 @@
     header {
       background: #e53238;
       color: #fff;
-      padding: 14px 16px;
+      padding: 12px 16px 0;
     }
-    header h1 { font-size: 15px; font-weight: 600; }
-    header p  { font-size: 11px; opacity: .85; margin-top: 2px; }
+    header h1 { font-size: 15px; font-weight: 700; margin-bottom: 10px; }
 
-    main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      border-bottom: 2px solid rgba(255,255,255,.3);
+    }
+    .tab-btn {
+      flex: 1;
+      background: none;
+      border: none;
+      color: rgba(255,255,255,.7);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px 4px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-btn.active {
+      color: #fff;
+      border-bottom-color: #fff;
+    }
+
+    /* ── Tab content ── */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    main { padding: 14px 16px; display: flex; flex-direction: column; gap: 11px; }
 
     label.file-label {
       display: flex;
@@ -36,9 +62,9 @@
     input[type="file"] {
       border: 1px dashed #ccc;
       border-radius: 6px;
-      padding: 8px;
+      padding: 7px;
       background: #fff;
-      font-size: 12px;
+      font-size: 11px;
       cursor: pointer;
     }
     input[type="file"]:hover { border-color: #e53238; }
@@ -52,28 +78,28 @@
       font-weight: 600;
     }
     .delay-row input[type="number"] {
-      width: 70px;
+      width: 74px;
       padding: 5px 8px;
       border: 1px solid #ccc;
       border-radius: 6px;
       font-size: 12px;
     }
 
-    #preview {
+    .preview-box {
       background: #fff;
       border: 1px solid #e0e0e0;
       border-radius: 6px;
       padding: 8px 10px;
       font-size: 11px;
       color: #444;
-      max-height: 100px;
+      max-height: 110px;
       overflow-y: auto;
       display: none;
     }
-    #preview .line { padding: 1px 0; }
-    #preview .meta { color: #888; margin-bottom: 4px; font-style: italic; }
+    .preview-box .meta { color: #888; margin-bottom: 4px; font-style: italic; }
+    .preview-box .row { padding: 1px 0; }
 
-    button#startBtn {
+    .action-btn {
       background: #e53238;
       color: #fff;
       border: none;
@@ -84,19 +110,19 @@
       cursor: pointer;
       transition: background .15s;
     }
-    button#startBtn:hover:not(:disabled) { background: #c0272c; }
-    button#startBtn:disabled { background: #ccc; cursor: not-allowed; }
+    .action-btn:hover:not(:disabled) { background: #c0272c; }
+    .action-btn:disabled { background: #ccc; cursor: not-allowed; }
 
-    #status {
+    .status-line {
       font-size: 12px;
       min-height: 18px;
       text-align: center;
       color: #555;
     }
-    #status.error { color: #c0272c; }
-    #status.success { color: #2e7d32; }
+    .status-line.error   { color: #c0272c; }
+    .status-line.success { color: #2e7d32; }
 
-    #progressWrap {
+    .progress-wrap {
       display: none;
       flex-direction: column;
       gap: 4px;
@@ -107,38 +133,78 @@
       border-radius: 4px;
       accent-color: #e53238;
     }
-    #progressLabel { font-size: 11px; color: #666; text-align: center; }
+    .progress-label { font-size: 11px; color: #666; text-align: center; }
+
+    hr { border: none; border-top: 1px solid #e0e0e0; }
   </style>
 </head>
 <body>
   <header>
-    <h1>eBay Bulk Variation Adder</h1>
-    <p>Add multiple variations from a text file</p>
+    <h1>eBay Bulk Listing Tool</h1>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="variations">Variations</button>
+      <button class="tab-btn"        data-tab="images">Images</button>
+    </div>
   </header>
 
-  <main>
-    <label class="file-label">
-      Select .txt file (one variation per line)
-      <input type="file" id="fileInput" accept=".txt" />
-    </label>
+  <!-- ── Variations tab ─────────────────────────────────── -->
+  <div id="panel-variations" class="tab-panel active">
+    <main>
+      <label class="file-label">
+        Select .txt file (one variation per line)
+        <input type="file" id="varFileInput" accept=".txt" />
+      </label>
 
-    <div id="preview"></div>
+      <div id="varPreview" class="preview-box"></div>
 
-    <div class="delay-row">
-      Delay between variations:
-      <input type="number" id="delay" value="800" min="200" max="5000" step="100" />
-      ms
-    </div>
+      <div class="delay-row">
+        Delay between variations:
+        <input type="number" id="varDelay" value="800" min="200" max="5000" step="100" />
+        ms
+      </div>
 
-    <button id="startBtn" disabled>Start Adding Variations</button>
+      <button id="startVarBtn" class="action-btn" disabled>Start Adding Variations</button>
 
-    <div id="progressWrap">
-      <progress id="progressBar" value="0" max="100"></progress>
-      <div id="progressLabel"></div>
-    </div>
+      <div id="varProgressWrap" class="progress-wrap">
+        <progress id="varProgressBar" value="0" max="100"></progress>
+        <div id="varProgressLabel" class="progress-label"></div>
+      </div>
 
-    <div id="status"></div>
-  </main>
+      <div id="varStatus" class="status-line"></div>
+    </main>
+  </div>
+
+  <!-- ── Images tab ─────────────────────────────────────── -->
+  <div id="panel-images" class="tab-panel">
+    <main>
+      <label class="file-label">
+        Select image folder
+        <input type="file" id="folderInput" webkitdirectory accept="image/*" />
+      </label>
+
+      <label class="file-label">
+        Select order .txt file (image filenames in order)
+        <input type="file" id="orderFileInput" accept=".txt" />
+      </label>
+
+      <div id="imgPreview" class="preview-box"></div>
+
+      <div class="delay-row">
+        Wait after each upload:
+        <input type="number" id="imgDelay" value="3000" min="500" max="30000" step="500" />
+        ms
+      </div>
+
+      <button id="startImgBtn" class="action-btn" disabled>Start Uploading Images</button>
+
+      <div id="imgProgressWrap" class="progress-wrap">
+        <progress id="imgProgressBar" value="0" max="100"></progress>
+        <div id="imgProgressLabel" class="progress-label"></div>
+      </div>
+
+      <div id="imgStatus" class="status-line"></div>
+    </main>
+  </div>
 
   <script src="popup.js"></script>
 </body>
