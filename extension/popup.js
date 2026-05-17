@@ -212,40 +212,26 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Find the parent frame (contains the <li> variation buttons) and the single
-  // shared picupload iframe (all variations share one iframe; clicking a <li>
-  // loads that variation's file input into it).
+  // Only find the parent frame once — it's stable throughout.
   setStatus(imgStatus, "Finding listing frame…");
-  let parentFrameId   = null;
-  let picuploadFrameId = null;
+  let parentFrameId = null;
 
   const MAX_ATTEMPTS = 5;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS && (parentFrameId === null || picuploadFrameId === null); attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS && parentFrameId === null; attempt++) {
     if (attempt > 0) await sleep(1500);
-
     const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
     for (const frame of frames) {
-      if (frame.url && frame.url.includes("/lstng/picupload") && picuploadFrameId === null) {
-        picuploadFrameId = frame.frameId;
-      }
-      if (parentFrameId === null) {
-        try {
-          const found = await execInFrame(tab.id, frame.frameId,
-            () => document.querySelector('[class*="picupload-variations__"]') !== null
-          );
-          if (found) parentFrameId = frame.frameId;
-        } catch (_) {}
-      }
-      if (parentFrameId !== null && picuploadFrameId !== null) break;
+      try {
+        const found = await execInFrame(tab.id, frame.frameId,
+          () => document.querySelector('[class*="picupload-variations__"]') !== null
+        );
+        if (found) { parentFrameId = frame.frameId; break; }
+      } catch (_) {}
     }
   }
 
   if (parentFrameId === null) {
     setStatus(imgStatus, "Could not find the listing frame. Make sure the Variations section is visible.", "error");
-    return;
-  }
-  if (picuploadFrameId === null) {
-    setStatus(imgStatus, "Could not find the picupload iframe. Make sure the Variations section is expanded.", "error");
     return;
   }
 
@@ -319,15 +305,24 @@ startImgBtn.addEventListener("click", async () => {
         }
       }
 
-      // Now wait for the matching file input to appear in the picupload frame.
+      // Re-find the picupload frame every iteration — eBay may replace the
+      // iframe when switching variations, so a cached frameId goes stale.
+      let picuploadFrameId = null;
       let inputReady = false;
-      for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
+      for (let attempt = 0; attempt < 12 && !inputReady; attempt++) {
         if (attempt > 0) await sleep(500);
         try {
-          inputReady = await execInFrame(tab.id, picuploadFrameId,
-            (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
-            [encoded]
-          );
+          const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+          for (const frame of frames) {
+            if (!frame.url || !frame.url.includes("/lstng/picupload")) continue;
+            try {
+              const found = await execInFrame(tab.id, frame.frameId,
+                (enc) => document.querySelector(`input[type="file"][id="${enc}"]`) !== null,
+                [encoded]
+              );
+              if (found) { picuploadFrameId = frame.frameId; inputReady = true; break; }
+            } catch (_) {}
+          }
         } catch (_) {}
       }
 
@@ -336,7 +331,7 @@ startImgBtn.addEventListener("click", async () => {
         break;
       }
 
-      // Step 3: inject the file into the input.
+      // Inject the file into the input.
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
