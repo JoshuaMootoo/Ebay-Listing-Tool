@@ -235,6 +235,24 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
+  // Find the picupload frame by URL — extension executeScript bypasses cross-origin.
+  setStatus(imgStatus, "Finding upload frame…");
+  let picuploadFrameId = null;
+  {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+    for (const frame of frames) {
+      if (frame.url && frame.url.includes("/lstng/picupload")) {
+        picuploadFrameId = frame.frameId;
+        break;
+      }
+    }
+  }
+
+  if (picuploadFrameId === null) {
+    setStatus(imgStatus, "Could not find the upload frame. Make sure the Variations section is visible.", "error");
+    return;
+  }
+
   lockUI(true, "img");
   imgProgressWrap.style.display = "flex";
   setProgress(imgProgressBar, imgProgressLabel, 0, imageOrder.length);
@@ -260,8 +278,25 @@ startImgBtn.addEventListener("click", async () => {
     setStatus(imgStatus, `Uploading ${i + 1}/${imageOrder.length}: ${escHtml(fileName)}…`);
 
     try {
-      // Use the <li>'s "select" class (in parent frame) to decide whether to
-      // click — avoids accidentally deselecting an already-active variation.
+      // Extract the full encoded ID from the <li> class (includes listing-name prefix).
+      // e.g. "picupload-variations__Vivid_Voltage_-_Base_Set__001_FSLASH_185_-_Weedle"
+      // → "Vivid_Voltage_-_Base_Set__001_FSLASH_185_-_Weedle"
+      const fullEnc = await execInFrame(tab.id, parentFrameId,
+        (enc) => {
+          const el = document.querySelector(`[class*="__${enc}"]`);
+          if (!el) return null;
+          const cls = [...el.classList].find(c => c.startsWith("picupload-variations__"));
+          return cls ? cls.replace("picupload-variations__", "") : null;
+        },
+        [encoded]
+      );
+
+      if (!fullEnc) {
+        setStatus(imgStatus, `Variation button not found for: "${escHtml(varName)}"`, "error");
+        break;
+      }
+
+      // Click the <li> if not already selected.
       const isSelected = await execInFrame(tab.id, parentFrameId,
         (enc) => {
           const el = document.querySelector(`[class*="__${enc}"]`);
@@ -305,62 +340,43 @@ startImgBtn.addEventListener("click", async () => {
         }
       }
 
-      // Check if input is reachable via iframe.contentDocument from the parent frame.
-      // eBay sets document.domain so the parent can access the picupload iframe directly.
-      const inputCheck = await execInFrame(tab.id, parentFrameId,
-        (enc) => {
-          const iframe = document.querySelector('#picupload-variations iframe');
-          if (!iframe) return { ok: false, error: 'iframe element not found' };
-          let doc;
-          try { doc = iframe.contentDocument || iframe.contentWindow?.document; }
-          catch (e) { return { ok: false, error: 'cross-origin: ' + e.message }; }
-          if (!doc) return { ok: false, error: 'contentDocument is null' };
-          return { ok: true, hasInput: !!doc.querySelector(`input[type="file"][id="${enc}"]`) };
-        },
-        [encoded]
-      );
+      // Poll the picupload frame for the file input using the full encoded ID.
+      // If the frameId went stale, re-find it.
+      let inputReady = false;
+      for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
+        if (attempt > 0) await sleep(500);
+        try {
+          const found = await execInFrame(tab.id, picuploadFrameId,
+            (fEnc) => !!document.querySelector(`input[type="file"][id="${fEnc}"]`),
+            [fullEnc]
+          );
+          if (found) inputReady = true;
+        } catch (_) {
+          const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+          for (const frame of frames) {
+            if (frame.url && frame.url.includes("/lstng/picupload")) {
+              picuploadFrameId = frame.frameId;
+              break;
+            }
+          }
+        }
+      }
 
-      if (!inputCheck?.ok) {
-        setStatus(imgStatus, `Cannot access upload iframe: ${inputCheck?.error || 'unknown'}`, "error");
+      if (!inputReady) {
+        setStatus(imgStatus, `Upload input did not appear for: "${escHtml(varName)}"`, "error");
         break;
       }
 
-      // If the input isn't ready yet, poll briefly.
-      if (!inputCheck.hasInput) {
-        let inputReady = false;
-        for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
-          await sleep(500);
-          const check = await execInFrame(tab.id, parentFrameId,
-            (enc) => {
-              const iframe = document.querySelector('#picupload-variations iframe');
-              try {
-                const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
-                return !!doc?.querySelector(`input[type="file"][id="${enc}"]`);
-              } catch { return false; }
-            },
-            [encoded]
-          );
-          if (check) inputReady = true;
-        }
-        if (!inputReady) {
-          setStatus(imgStatus, `Upload input did not appear for: "${escHtml(varName)}"`, "error");
-          break;
-        }
-      }
-
-      // Inject the file directly via iframe.contentDocument in the parent frame.
+      // Inject the file into the input directly in the picupload frame.
+      // chrome.scripting.executeScript bypasses same-origin for frames the
+      // extension has host_permissions for.
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
-      const result = await execInFrame(tab.id, parentFrameId,
-        (enc, base64Data, name, type) => {
-          const iframe = document.querySelector('#picupload-variations iframe');
-          let doc;
-          try { doc = iframe?.contentDocument || iframe?.contentWindow?.document; }
-          catch (e) { return { success: false, error: 'cross-origin: ' + e.message }; }
-
-          const input = doc?.querySelector(`input[type="file"][id="${enc}"]`);
-          if (!input) return { success: false, error: 'input not found in iframe' };
+      const result = await execInFrame(tab.id, picuploadFrameId,
+        (fEnc, base64Data, name, type) => {
+          const input = document.querySelector(`input[type="file"][id="${fEnc}"]`);
+          if (!input) return { success: false, error: "input not found" };
 
           const binary = atob(base64Data);
           const bytes  = new Uint8Array(binary.length);
@@ -370,11 +386,11 @@ startImgBtn.addEventListener("click", async () => {
           const dt = new DataTransfer();
           dt.items.add(f);
           input.files = dt.files;
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.dispatchEvent(new Event('input',  { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          input.dispatchEvent(new Event("input",  { bubbles: true }));
           return { success: true };
         },
-        [encoded, base64, file.name, file.type || 'image/jpeg']
+        [fullEnc, base64, file.name, file.type || "image/jpeg"]
       );
 
       if (!result?.success) {
