@@ -235,20 +235,41 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Find the picupload frame by URL, requiring it to be a child of the parent frame
-  // so we don't accidentally target the main-listing picupload instead of the variation one.
+  // Find the picupload iframe that lives inside div.photos-upload in the msku frame.
+  // There can be multiple /lstng/picupload frames on the page (one for the main listing
+  // photos, one for the variations section), so we ask the msku frame which iframe src
+  // is inside the .photos-upload container, then match that URL to the frame list.
   setStatus(imgStatus, "Finding upload frame…");
   let picuploadFrameId = null;
   {
+    const photoIframeSrc = await execInFrame(tab.id, parentFrameId, () => {
+      const div = document.querySelector(".photos-upload");
+      const iframe = div && div.querySelector("iframe");
+      return iframe ? iframe.src : null;
+    });
+
     const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-    // Prefer a picupload frame whose direct parent is the msku/variations frame.
-    for (const frame of frames) {
-      if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
-        picuploadFrameId = frame.frameId;
-        break;
+
+    if (photoIframeSrc) {
+      for (const frame of frames) {
+        if (frame.url && frame.url === photoIframeSrc) {
+          picuploadFrameId = frame.frameId;
+          break;
+        }
       }
     }
-    // Fall back to any picupload frame if the strict match found nothing.
+
+    // Fall back: child of msku frame with picupload in URL.
+    if (picuploadFrameId === null) {
+      for (const frame of frames) {
+        if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
+          picuploadFrameId = frame.frameId;
+          break;
+        }
+      }
+    }
+
+    // Last resort: any picupload frame.
     if (picuploadFrameId === null) {
       for (const frame of frames) {
         if (frame.url && frame.url.includes("/lstng/picupload")) {
@@ -345,18 +366,29 @@ startImgBtn.addEventListener("click", async () => {
           );
           if (found) inputReady = true;
         } catch (_) {
+          // Re-find the correct picupload frame using the same .photos-upload anchor.
+          const photoSrc = await execInFrame(tab.id, parentFrameId, () => {
+            const div = document.querySelector(".photos-upload");
+            const iframe = div && div.querySelector("iframe");
+            return iframe ? iframe.src : null;
+          }).catch(() => null);
           const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-          for (const frame of frames) {
-            if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
-              picuploadFrameId = frame.frameId;
-              break;
+          if (photoSrc) {
+            for (const frame of frames) {
+              if (frame.url && frame.url === photoSrc) { picuploadFrameId = frame.frameId; break; }
+            }
+          }
+          if (!picuploadFrameId) {
+            for (const frame of frames) {
+              if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
+                picuploadFrameId = frame.frameId; break;
+              }
             }
           }
           if (!picuploadFrameId) {
             for (const frame of frames) {
               if (frame.url && frame.url.includes("/lstng/picupload")) {
-                picuploadFrameId = frame.frameId;
-                break;
+                picuploadFrameId = frame.frameId; break;
               }
             }
           }
