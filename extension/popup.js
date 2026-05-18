@@ -354,15 +354,14 @@ startImgBtn.addEventListener("click", async () => {
         }
       }
 
-      // The picupload iframe has a single shared input[id="DEFAULT"].
-      // eBay routes the upload to whichever variation is currently selected.
-      // Poll in case the frame is still loading; re-find frameId on error.
+      // Poll for the variation's file input (id = encoded variation name) in the picupload frame.
       let inputReady = false;
       for (let attempt = 0; attempt < 10 && !inputReady; attempt++) {
         if (attempt > 0) await sleep(500);
         try {
           const found = await execInFrame(tab.id, picuploadFrameId,
-            () => !!document.getElementById("DEFAULT")
+            (enc) => !!document.getElementById(enc),
+            [encoded]
           );
           if (found) inputReady = true;
         } catch (_) {
@@ -396,7 +395,6 @@ startImgBtn.addEventListener("click", async () => {
       }
 
       if (!inputReady) {
-        // Dump the IDs of all inputs in the frame to help diagnose the correct selector.
         const foundIds = await execInFrame(tab.id, picuploadFrameId,
           () => Array.from(document.querySelectorAll("input")).map(el => el.id || "(no id)").join(", ")
         ).catch(() => "frame unreachable");
@@ -404,14 +402,14 @@ startImgBtn.addEventListener("click", async () => {
         break;
       }
 
-      // Inject the file into the DEFAULT input in the picupload frame.
+      // Inject the file into the variation's input in the picupload frame.
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
 
       const result = await execInFrame(tab.id, picuploadFrameId,
-        (base64Data, name, type) => {
-          const input = document.getElementById("DEFAULT");
-          if (!input) return { success: false, error: "DEFAULT input not found" };
+        (base64Data, name, type, enc) => {
+          const input = document.getElementById(enc);
+          if (!input) return { success: false, error: `Input #${enc} not found` };
 
           const binary = atob(base64Data);
           const bytes  = new Uint8Array(binary.length);
@@ -425,7 +423,7 @@ startImgBtn.addEventListener("click", async () => {
           input.dispatchEvent(new Event("input",  { bubbles: true }));
           return { success: true };
         },
-        [base64, file.name, file.type || "image/jpeg"]
+        [base64, file.name, file.type || "image/jpeg", encoded]
       );
 
       if (!result?.success) {
