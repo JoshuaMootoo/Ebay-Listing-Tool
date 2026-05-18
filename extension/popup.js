@@ -141,10 +141,11 @@ let imageMap      = {};  // filename (lowercase) → File
 let imageOrder    = [];  // ordered image filenames from file-list txt
 let imgVarLines   = [];  // ordered variation names (same file as Variations tab)
 
-// Encodes a variation name to match eBay's file input id format.
-// "001 / 185 - Weedle" → "001_FSLASH_185_-_Weedle"
+// Encodes a variation name to match eBay's class/input id format.
+// "001 / 185 - Weedle"       → "001_FSLASH_185_-_Weedle"
+// "152 / 185 - Hero's Medal" → "152_FSLASH_185_-_Heros_Medal"  (apostrophe stripped)
 function encodeVariation(name) {
-  return name.replace(/\//g, "FSLASH").replace(/ /g, "_");
+  return name.replace(/\//g, "FSLASH").replace(/'/g, "").replace(/ /g, "_");
 }
 
 function tryEnableImgStart() {
