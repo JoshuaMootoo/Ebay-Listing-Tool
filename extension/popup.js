@@ -291,6 +291,11 @@ startImgBtn.addEventListener("click", async () => {
   setStatus(imgStatus, "Uploading…");
 
   let uploaded = 0;
+  const errorLog = [];
+
+  function logError(varName, fileName, message) {
+    errorLog.push({ varName, fileName, message });
+  }
 
   for (let i = 0; i < imageOrder.length; i++) {
     const fileName = imageOrder[i];
@@ -298,12 +303,15 @@ startImgBtn.addEventListener("click", async () => {
     const file     = imageMap[fileName.toLowerCase()];
 
     if (!varName) {
-      setStatus(imgStatus, `No variation name for line ${i + 1} — variations file is shorter than image list.`, "error");
+      setStatus(imgStatus, `Variations file is shorter than image list — stopped at line ${i + 1}.`, "error");
       break;
     }
+
+    setProgress(imgProgressBar, imgProgressLabel, i, imageOrder.length);
+
     if (!file) {
-      setStatus(imgStatus, `File not found in folder: "${escHtml(fileName)}"`, "error");
-      break;
+      logError(varName, fileName, "File not found in selected folder");
+      continue;
     }
 
     const encoded = encodeVariation(varName);
@@ -331,8 +339,8 @@ startImgBtn.addEventListener("click", async () => {
         );
 
         if (!clicked) {
-          setStatus(imgStatus, `Variation button not found for: "${escHtml(varName)}"`, "error");
-          break;
+          logError(varName, fileName, "Variation button not found");
+          continue;
         }
 
         // Wait for the <li> to gain the "select" class confirming the switch.
@@ -349,8 +357,8 @@ startImgBtn.addEventListener("click", async () => {
         }
 
         if (!confirmed) {
-          setStatus(imgStatus, `Variation did not become active: "${escHtml(varName)}"`, "error");
-          break;
+          logError(varName, fileName, "Variation did not become active after clicking");
+          continue;
         }
       }
 
@@ -398,8 +406,8 @@ startImgBtn.addEventListener("click", async () => {
         const foundIds = await execInFrame(tab.id, picuploadFrameId,
           () => Array.from(document.querySelectorAll("input")).map(el => el.id || "(no id)").join(", ")
         ).catch(() => "frame unreachable");
-        setStatus(imgStatus, `Upload input not ready for: "${escHtml(varName)}" — inputs found: ${foundIds}`, "error");
-        break;
+        logError(varName, fileName, `Upload input not ready (inputs found: ${foundIds})`);
+        continue;
       }
 
       // Inject the file into the variation's input in the picupload frame.
@@ -427,21 +435,31 @@ startImgBtn.addEventListener("click", async () => {
       );
 
       if (!result?.success) {
-        setStatus(imgStatus, result?.error || `Failed on image ${i + 1}.`, "error");
-        break;
+        logError(varName, fileName, result?.error || "Injection failed");
+        continue;
       }
 
       uploaded++;
       setProgress(imgProgressBar, imgProgressLabel, uploaded, imageOrder.length);
       await sleep(uploadDelay);
     } catch (err) {
-      setStatus(imgStatus, `Error on image ${i + 1}: ${err.message}`, "error");
-      break;
+      logError(varName, fileName, err.message);
     }
   }
 
-  if (uploaded === imageOrder.length) {
+  setProgress(imgProgressBar, imgProgressLabel, imageOrder.length, imageOrder.length);
+
+  if (errorLog.length === 0) {
     setStatus(imgStatus, `Done! Uploaded all ${uploaded} image${uploaded === 1 ? "" : "s"}.`, "success");
+  } else {
+    setStatus(imgStatus, `Done: ${uploaded} uploaded, ${errorLog.length} skipped — downloading error log.`, uploaded > 0 ? "success" : "error");
+    const lines = ["Variation\tFile\tError", ...errorLog.map(e => `${e.varName}\t${e.fileName}\t${e.message}`)];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "upload-errors.txt";
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   lockUI(false, "img");

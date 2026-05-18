@@ -1,13 +1,18 @@
 {
   "manifest_version": 3,
   "name": "eBay Bulk Listing Tool",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Bulk-add variations and auto-upload images to eBay listings.",
-  "permissions": ["activeTab", "scripting", "webNavigation"],
+  "permissions": ["activeTab", "scripting", "webNavigation", "sidePanel"],
   "host_permissions": ["https://*.ebay.com/*", "https://*.ebay.co.uk/*", "https://*.ebay.com.au/*", "https://*.ebay.de/*", "https://*.ebay.fr/*", "https://*.ebay.it/*", "https://*.ebay.es/*", "https://*.ebay.ca/*"],
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "eBay Bulk Variation Adder"
+    "default_title": "eBay Bulk Listing Tool"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
