@@ -235,44 +235,44 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Find the picupload iframe that lives inside div.photos-upload in the msku frame.
-  // There can be multiple /lstng/picupload frames on the page (one for the main listing
-  // photos, one for the variations section), so we ask the msku frame which iframe src
-  // is inside the .photos-upload container, then match that URL to the frame list.
+  // There are two picupload iframes in the msku frame:
+  //   div#picupload-variations  → variation photos  (what we want)
+  //   div#photos-default        → default/main photos (wrong one)
+  // Read the src of the iframe inside div#picupload-variations and match it to the frame list.
   setStatus(imgStatus, "Finding upload frame…");
   let picuploadFrameId = null;
   {
-    const photoIframeSrc = await execInFrame(tab.id, parentFrameId, () => {
-      const div = document.querySelector(".photos-upload");
+    const varIframeSrc = await execInFrame(tab.id, parentFrameId, () => {
+      const div = document.getElementById("picupload-variations");
       const iframe = div && div.querySelector("iframe");
       return iframe ? iframe.src : null;
     });
 
     const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
 
-    if (photoIframeSrc) {
+    if (varIframeSrc) {
       for (const frame of frames) {
-        if (frame.url && frame.url === photoIframeSrc) {
+        if (frame.url && frame.url === varIframeSrc) {
           picuploadFrameId = frame.frameId;
           break;
         }
       }
     }
 
-    // Fall back: child of msku frame with picupload in URL.
+    // Fall back: any picupload frame whose URL contains the variation windowName.
+    if (picuploadFrameId === null) {
+      for (const frame of frames) {
+        if (frame.url && frame.url.includes("photo-iframe-picupload-variations")) {
+          picuploadFrameId = frame.frameId;
+          break;
+        }
+      }
+    }
+
+    // Last resort: child of msku frame with picupload in URL.
     if (picuploadFrameId === null) {
       for (const frame of frames) {
         if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
-          picuploadFrameId = frame.frameId;
-          break;
-        }
-      }
-    }
-
-    // Last resort: any picupload frame.
-    if (picuploadFrameId === null) {
-      for (const frame of frames) {
-        if (frame.url && frame.url.includes("/lstng/picupload")) {
           picuploadFrameId = frame.frameId;
           break;
         }
@@ -366,28 +366,28 @@ startImgBtn.addEventListener("click", async () => {
           );
           if (found) inputReady = true;
         } catch (_) {
-          // Re-find the correct picupload frame using the same .photos-upload anchor.
-          const photoSrc = await execInFrame(tab.id, parentFrameId, () => {
-            const div = document.querySelector(".photos-upload");
+          // Re-find using div#picupload-variations iframe src.
+          const varSrc = await execInFrame(tab.id, parentFrameId, () => {
+            const div = document.getElementById("picupload-variations");
             const iframe = div && div.querySelector("iframe");
             return iframe ? iframe.src : null;
           }).catch(() => null);
           const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-          if (photoSrc) {
+          if (varSrc) {
             for (const frame of frames) {
-              if (frame.url && frame.url === photoSrc) { picuploadFrameId = frame.frameId; break; }
+              if (frame.url && frame.url === varSrc) { picuploadFrameId = frame.frameId; break; }
             }
           }
           if (!picuploadFrameId) {
             for (const frame of frames) {
-              if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
+              if (frame.url && frame.url.includes("photo-iframe-picupload-variations")) {
                 picuploadFrameId = frame.frameId; break;
               }
             }
           }
           if (!picuploadFrameId) {
             for (const frame of frames) {
-              if (frame.url && frame.url.includes("/lstng/picupload")) {
+              if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
                 picuploadFrameId = frame.frameId; break;
               }
             }
