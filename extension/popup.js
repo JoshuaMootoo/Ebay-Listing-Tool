@@ -235,15 +235,26 @@ startImgBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Find the picupload frame by URL — extension executeScript bypasses cross-origin.
+  // Find the picupload frame by URL, requiring it to be a child of the parent frame
+  // so we don't accidentally target the main-listing picupload instead of the variation one.
   setStatus(imgStatus, "Finding upload frame…");
   let picuploadFrameId = null;
   {
     const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+    // Prefer a picupload frame whose direct parent is the msku/variations frame.
     for (const frame of frames) {
-      if (frame.url && frame.url.includes("/lstng/picupload")) {
+      if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
         picuploadFrameId = frame.frameId;
         break;
+      }
+    }
+    // Fall back to any picupload frame if the strict match found nothing.
+    if (picuploadFrameId === null) {
+      for (const frame of frames) {
+        if (frame.url && frame.url.includes("/lstng/picupload")) {
+          picuploadFrameId = frame.frameId;
+          break;
+        }
       }
     }
   }
@@ -336,9 +347,17 @@ startImgBtn.addEventListener("click", async () => {
         } catch (_) {
           const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
           for (const frame of frames) {
-            if (frame.url && frame.url.includes("/lstng/picupload")) {
+            if (frame.url && frame.url.includes("/lstng/picupload") && frame.parentFrameId === parentFrameId) {
               picuploadFrameId = frame.frameId;
               break;
+            }
+          }
+          if (!picuploadFrameId) {
+            for (const frame of frames) {
+              if (frame.url && frame.url.includes("/lstng/picupload")) {
+                picuploadFrameId = frame.frameId;
+                break;
+              }
             }
           }
         }
