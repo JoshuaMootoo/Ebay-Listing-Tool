@@ -396,7 +396,11 @@ startImgBtn.addEventListener("click", async () => {
       }
 
       if (!inputReady) {
-        setStatus(imgStatus, `Upload input not ready for: "${escHtml(varName)}"`, "error");
+        // Dump the IDs of all inputs in the frame to help diagnose the correct selector.
+        const foundIds = await execInFrame(tab.id, picuploadFrameId,
+          () => Array.from(document.querySelectorAll("input")).map(el => el.id || "(no id)").join(", ")
+        ).catch(() => "frame unreachable");
+        setStatus(imgStatus, `Upload input not ready for: "${escHtml(varName)}" — inputs found: ${foundIds}`, "error");
         break;
       }
 
